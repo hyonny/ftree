@@ -1,10 +1,19 @@
-use crossterm::event::KeyCode;
+use std::time::{Duration, Instant};
+
+use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app::{App, Mode};
 use crate::clipboard;
 
+const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(300);
+
 /// キー入力を処理する。終了する場合は true を返す。
-pub fn handle_key(app: &mut App, key: KeyCode) -> bool {
+pub fn handle_key(app: &mut App, key: KeyCode, preview_visible_lines: usize) -> bool {
+    // プレビュー表示中
+    if app.show_preview {
+        return handle_preview_mode(app, key, preview_visible_lines);
+    }
+
     // ヘルプ表示中
     if app.show_help {
         return handle_help_mode(app, key);
@@ -15,6 +24,22 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> bool {
         Mode::Normal => handle_normal_mode(app, key),
         Mode::Search => handle_search_mode(app, key),
     }
+}
+
+fn handle_preview_mode(app: &mut App, key: KeyCode, visible_lines: usize) -> bool {
+    match key {
+        KeyCode::Esc | KeyCode::Char('p') | KeyCode::Char('q') => {
+            app.close_preview();
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.preview_scroll_down(visible_lines);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.preview_scroll_up();
+        }
+        _ => {}
+    }
+    false
 }
 
 fn handle_help_mode(app: &mut App, key: KeyCode) -> bool {
@@ -96,6 +121,14 @@ fn handle_normal_mode(app: &mut App, key: KeyCode) -> bool {
             app.set_message(format!("Hidden files: {}", status));
         }
 
+        KeyCode::Char('R') => {
+            app.refresh_git_status();
+        }
+
+        KeyCode::Char('p') => {
+            app.show_preview();
+        }
+
         _ => {}
     }
 
@@ -136,4 +169,60 @@ fn handle_search_mode(app: &mut App, key: KeyCode) -> bool {
     }
 
     false
+}
+
+/// マウス入力を処理する
+pub fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    // ヘルプ表示中や検索モード中はマウス操作を無視
+    if app.show_help || app.mode == Mode::Search {
+        return;
+    }
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let now = Instant::now();
+            let is_double_click = app
+                .last_click
+                .map(|(time, row, col)| {
+                    now.duration_since(time) < DOUBLE_CLICK_THRESHOLD
+                        && row == mouse.row
+                        && col == mouse.column
+                })
+                .unwrap_or(false);
+
+            if let Some(row) = calculate_tree_row(app, mouse.row) {
+                let visible_count = app.visible_nodes().len();
+                if row < visible_count {
+                    app.cursor = row;
+                    if is_double_click {
+                        // ダブルクリックでディレクトリを開閉
+                        app.toggle_selected();
+                        app.last_click = None;
+                    } else {
+                        app.last_click = Some((now, mouse.row, mouse.column));
+                    }
+                }
+            } else {
+                app.last_click = Some((now, mouse.row, mouse.column));
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            // スクロールアップで上に移動
+            app.move_up();
+        }
+        MouseEventKind::ScrollDown => {
+            // スクロールダウンで下に移動
+            app.move_down();
+        }
+        _ => {}
+    }
+}
+
+/// マウスのY座標からツリー内の行番号を計算
+fn calculate_tree_row(app: &App, mouse_y: u16) -> Option<usize> {
+    if mouse_y >= app.tree_area_y && mouse_y < app.tree_area_y + app.tree_area_height {
+        Some((mouse_y - app.tree_area_y) as usize)
+    } else {
+        None
+    }
 }

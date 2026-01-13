@@ -1,6 +1,10 @@
+use std::collections::HashMap;
 use std::env;
 use std::io;
+use std::time::Instant;
 
+use crate::git::{self, GitStatus};
+use crate::preview::PreviewContent;
 use crate::search::SearchState;
 use crate::tree::FileTree;
 
@@ -18,12 +22,28 @@ pub struct App {
     pub show_hidden: bool,
     pub show_help: bool,
     pub message: Option<String>,
+    /// ツリー表示エリアのY座標（マウス操作用）
+    pub tree_area_y: u16,
+    pub tree_area_height: u16,
+    /// ダブルクリック検出用
+    pub last_click: Option<(Instant, u16, u16)>,
+    /// Gitステータス（相対パス -> ステータス）
+    pub git_status: HashMap<String, GitStatus>,
+    /// プレビュー表示中
+    pub show_preview: bool,
+    /// プレビュー内容
+    pub preview_content: Option<PreviewContent>,
+    /// プレビューのスクロール位置
+    pub preview_scroll: usize,
+    /// プレビューの表示可能行数（UIから設定）
+    pub preview_visible_lines: usize,
 }
 
 impl App {
     pub fn new() -> io::Result<Self> {
         let cwd = env::current_dir()?;
         let tree = FileTree::new(&cwd)?;
+        let git_status = git::get_git_status(&tree.root_path);
 
         Ok(Self {
             tree,
@@ -33,7 +53,63 @@ impl App {
             show_hidden: false,
             show_help: false,
             message: None,
+            tree_area_y: 0,
+            tree_area_height: 0,
+            last_click: None,
+            git_status,
+            show_preview: false,
+            preview_content: None,
+            preview_scroll: 0,
+            preview_visible_lines: 20,
         })
+    }
+
+    /// Gitステータスをリフレッシュ
+    pub fn refresh_git_status(&mut self) {
+        self.git_status = git::get_git_status(&self.tree.root_path);
+        self.set_message("Git status refreshed");
+    }
+
+    /// 指定ノードのGitステータスを取得
+    pub fn get_git_status(&self, idx: usize) -> Option<GitStatus> {
+        self.tree.get_relative_path(idx).and_then(|path| {
+            let path_str = path.to_string_lossy().to_string();
+            self.git_status.get(&path_str).copied()
+        })
+    }
+
+    /// プレビューを表示
+    pub fn show_preview(&mut self) {
+        if let Some(idx) = self.selected_index() {
+            let path = &self.tree.nodes[idx].path;
+            self.preview_content = Some(PreviewContent::load(path));
+            self.preview_scroll = 0;
+            self.show_preview = true;
+        }
+    }
+
+    /// プレビューを閉じる
+    pub fn close_preview(&mut self) {
+        self.show_preview = false;
+        self.preview_content = None;
+        self.preview_scroll = 0;
+    }
+
+    /// プレビューを上にスクロール
+    pub fn preview_scroll_up(&mut self) {
+        if self.preview_scroll > 0 {
+            self.preview_scroll -= 1;
+        }
+    }
+
+    /// プレビューを下にスクロール
+    pub fn preview_scroll_down(&mut self, visible_lines: usize) {
+        if let Some(content) = &self.preview_content {
+            let max_scroll = content.lines.len().saturating_sub(visible_lines);
+            if self.preview_scroll < max_scroll {
+                self.preview_scroll += 1;
+            }
+        }
     }
 
     pub fn visible_nodes(&self) -> Vec<usize> {

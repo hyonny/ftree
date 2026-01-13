@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 use crate::app::{App, Mode};
+use crate::git::GitStatus;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let areas = if app.mode == Mode::Search {
@@ -27,6 +28,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     if app.show_help {
         render_help(frame);
+    }
+
+    if app.show_preview {
+        render_preview(frame, app);
     }
 }
 
@@ -52,6 +57,10 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
+    // マウス操作用にツリーエリアの位置を保存（ボーダー分を考慮）
+    app.tree_area_y = area.y + 1;
+    app.tree_area_height = area.height.saturating_sub(2);
+
     let visible = app.visible_nodes();
     let is_searching = app.mode == Mode::Search && !app.search.query.is_empty();
 
@@ -71,10 +80,16 @@ fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
                 "\u{f15b} "
             };
 
-            let base_style = if node.is_dir {
-                Style::default().fg(Color::Blue)
-            } else {
-                Style::default()
+            // Gitステータスに基づいてスタイルを調整
+            let git_status = app.get_git_status(idx);
+            let base_style = match git_status {
+                Some(GitStatus::Modified) => Style::default().fg(Color::Yellow),
+                Some(GitStatus::Added) => Style::default().fg(Color::Green),
+                Some(GitStatus::Deleted) => Style::default().fg(Color::Red),
+                Some(GitStatus::Untracked) => Style::default().fg(Color::Gray),
+                Some(GitStatus::Conflicted) => Style::default().fg(Color::Magenta),
+                _ if node.is_dir => Style::default().fg(Color::Blue),
+                _ => Style::default(),
             };
 
             // 検索中でマッチしている場合はハイライト
@@ -95,6 +110,19 @@ fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
             spans.extend(name_spans);
             if is_current {
                 spans.push(Span::styled(" <", Style::default().fg(Color::Green)));
+            }
+
+            // Gitステータスマーカー
+            if let Some(status) = git_status {
+                let marker_style = match status {
+                    GitStatus::Modified => Style::default().fg(Color::Yellow),
+                    GitStatus::Added => Style::default().fg(Color::Green),
+                    GitStatus::Deleted => Style::default().fg(Color::Red),
+                    GitStatus::Untracked => Style::default().fg(Color::Gray),
+                    GitStatus::Conflicted => Style::default().fg(Color::Magenta),
+                    _ => Style::default(),
+                };
+                spans.push(Span::styled(format!(" [{}]", status.marker()), marker_style));
             }
 
             ListItem::new(Line::from(spans))
@@ -192,6 +220,14 @@ fn render_help(frame: &mut Frame) {
             Span::raw("検索 (↑↓:次/前)"),
         ]),
         Line::from(vec![
+            Span::styled("  R          ", Style::default().fg(Color::Yellow)),
+            Span::raw("Gitステータス更新"),
+        ]),
+        Line::from(vec![
+            Span::styled("  p          ", Style::default().fg(Color::Yellow)),
+            Span::raw("ファイルプレビュー"),
+        ]),
+        Line::from(vec![
             Span::styled("  ? / F1     ", Style::default().fg(Color::Yellow)),
             Span::raw("ヘルプ表示/閉じる"),
         ]),
@@ -200,6 +236,10 @@ fn render_help(frame: &mut Frame) {
             Span::raw("終了"),
         ]),
         Line::from(""),
+        Line::from(Span::styled(
+            "  Mouse: click=select, dblclick=toggle, scroll=move",
+            Style::default().fg(Color::DarkGray),
+        )),
         Line::from(Span::styled(
             "  Press ? / F1 / Esc to close",
             Style::default().fg(Color::DarkGray),
@@ -215,7 +255,7 @@ fn render_help(frame: &mut Frame) {
         )
         .style(Style::default().bg(Color::Black));
 
-    let area = centered_rect(40, 19, frame.area());
+    let area = centered_rect(55, 22, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(help, area);
 }
@@ -266,4 +306,60 @@ fn highlight_matches(text: &str, indices: &[u32], base_style: Style) -> Vec<Span
     }
 
     spans
+}
+
+fn render_preview(frame: &mut Frame, app: &mut App) {
+    let Some(content) = &app.preview_content else {
+        return;
+    };
+
+    // 画面の90%を使用
+    let area = frame.area();
+    let width = (area.width as f32 * 0.9) as u16;
+    let height = (area.height as f32 * 0.9) as u16;
+    let preview_area = centered_rect(width.max(40), height.max(10), area);
+
+    // 表示可能行数を計算（ボーダーとタイトル分を引く）
+    let visible_lines = preview_area.height.saturating_sub(2) as usize;
+    app.preview_visible_lines = visible_lines;
+
+    // タイトル（ファイル名とスクロール情報）
+    let total_lines = content.lines.len();
+    let title = if total_lines > visible_lines {
+        format!(
+            " {} [{}-{}/{}] (j/k:scroll, Esc/p/q:close) ",
+            content.file_name,
+            app.preview_scroll + 1,
+            (app.preview_scroll + visible_lines).min(total_lines),
+            total_lines
+        )
+    } else {
+        format!(" {} (Esc/p/q:close) ", content.file_name)
+    };
+
+    // 表示する行を取得
+    let lines: Vec<Line> = content
+        .lines
+        .iter()
+        .skip(app.preview_scroll)
+        .take(visible_lines)
+        .map(|line| {
+            // 行が長すぎる場合は切り詰め
+            let display_width = (preview_area.width - 2) as usize;
+            let truncated: String = line.chars().take(display_width).collect();
+            Line::from(truncated)
+        })
+        .collect();
+
+    let preview = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().bg(Color::Black)),
+        )
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, preview_area);
+    frame.render_widget(preview, preview_area);
 }
