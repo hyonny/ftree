@@ -27,8 +27,18 @@ fn main() -> io::Result<()> {
 
 fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
     let mut app = App::new()?;
+    let mut mouse_captured = true;
 
     loop {
+        // プレビュー表示中はマウスキャプチャを無効化（テキスト選択を可能に）
+        if app.show_preview && mouse_captured {
+            execute!(io::stdout(), DisableMouseCapture)?;
+            mouse_captured = false;
+        } else if !app.show_preview && !mouse_captured {
+            execute!(io::stdout(), EnableMouseCapture)?;
+            mouse_captured = true;
+        }
+
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         match event::read()? {
@@ -41,8 +51,11 @@ fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
                 }
             }
             Event::Mouse(mouse) => {
-                let visible_lines = app.preview_visible_lines;
-                input::handle_mouse(&mut app, mouse, visible_lines);
+                // マウスキャプチャ中のみマウスイベントを処理
+                if mouse_captured {
+                    let visible_lines = app.preview_visible_lines;
+                    input::handle_mouse(&mut app, mouse, visible_lines);
+                }
             }
             _ => {}
         }

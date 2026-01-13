@@ -37,6 +37,8 @@ pub struct App {
     pub preview_scroll: usize,
     /// プレビューの表示可能行数（UIから設定）
     pub preview_visible_lines: usize,
+    /// プレビューで行番号を表示するか
+    pub preview_show_line_numbers: bool,
 }
 
 impl App {
@@ -61,6 +63,7 @@ impl App {
             preview_content: None,
             preview_scroll: 0,
             preview_visible_lines: 20,
+            preview_show_line_numbers: true,
         })
     }
 
@@ -110,6 +113,11 @@ impl App {
                 self.preview_scroll += 1;
             }
         }
+    }
+
+    /// プレビューの行番号表示を切替
+    pub fn toggle_preview_line_numbers(&mut self) {
+        self.preview_show_line_numbers = !self.preview_show_line_numbers;
     }
 
     pub fn visible_nodes(&self) -> Vec<usize> {

@@ -37,6 +37,9 @@ fn handle_preview_mode(app: &mut App, key: KeyCode, visible_lines: usize) -> boo
         KeyCode::Char('k') | KeyCode::Up => {
             app.preview_scroll_up();
         }
+        KeyCode::Char('n') => {
+            app.toggle_preview_line_numbers();
+        }
         _ => {}
     }
     false

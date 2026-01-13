@@ -327,19 +327,23 @@ fn render_preview(frame: &mut Frame, app: &mut App) {
     let total_lines = content.lines.len();
     let title = if total_lines > visible_lines {
         format!(
-            " {} [{}-{}/{}] (j/k:scroll, Esc/p/q:close) ",
+            " {} [{}-{}/{}] (j/k:scroll, n:lineno, Esc:close) ",
             content.file_name,
             app.preview_scroll + 1,
             (app.preview_scroll + visible_lines).min(total_lines),
             total_lines
         )
     } else {
-        format!(" {} (Esc/p/q:close) ", content.file_name)
+        format!(" {} (n:lineno, Esc:close) ", content.file_name)
     };
 
     // 行番号の桁数を計算
     let line_num_width = total_lines.to_string().len().max(3);
-    let line_num_col_width = line_num_width + 2; // " 123 " のように前後にスペース
+    let line_num_col_width = if app.preview_show_line_numbers {
+        line_num_width + 2
+    } else {
+        0
+    };
 
     // 表示する行を取得（シンタックスハイライト付き）
     let display_width = (preview_area.width - 2) as usize - line_num_col_width;
@@ -353,12 +357,14 @@ fn render_preview(frame: &mut Frame, app: &mut App) {
             let line_num = idx + 1;
             let mut spans: Vec<Span> = Vec::new();
 
-            // 行番号を追加
-            let line_num_str = format!("{:>width$} ", line_num, width = line_num_width);
-            spans.push(Span::styled(
-                line_num_str,
-                Style::default().fg(Color::DarkGray),
-            ));
+            // 行番号を追加（表示設定がONの場合のみ）
+            if app.preview_show_line_numbers {
+                let line_num_str = format!("{:>width$} ", line_num, width = line_num_width);
+                spans.push(Span::styled(
+                    line_num_str,
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
 
             let mut current_width = 0;
 
