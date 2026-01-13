@@ -41,7 +41,8 @@ fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
                 }
             }
             Event::Mouse(mouse) => {
-                input::handle_mouse(&mut app, mouse);
+                let visible_lines = app.preview_visible_lines;
+                input::handle_mouse(&mut app, mouse, visible_lines);
             }
             _ => {}
         }

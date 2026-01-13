@@ -172,9 +172,23 @@ fn handle_search_mode(app: &mut App, key: KeyCode) -> bool {
 }
 
 /// マウス入力を処理する
-pub fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+pub fn handle_mouse(app: &mut App, mouse: MouseEvent, preview_visible_lines: usize) {
     // ヘルプ表示中や検索モード中はマウス操作を無視
     if app.show_help || app.mode == Mode::Search {
+        return;
+    }
+
+    // プレビュー表示中はスクロールをプレビューに適用
+    if app.show_preview {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                app.preview_scroll_up();
+            }
+            MouseEventKind::ScrollDown => {
+                app.preview_scroll_down(preview_visible_lines);
+            }
+            _ => {}
+        }
         return;
     }
 

@@ -337,17 +337,48 @@ fn render_preview(frame: &mut Frame, app: &mut App) {
         format!(" {} (Esc/p/q:close) ", content.file_name)
     };
 
-    // 表示する行を取得
+    // 行番号の桁数を計算
+    let line_num_width = total_lines.to_string().len().max(3);
+    let line_num_col_width = line_num_width + 2; // " 123 " のように前後にスペース
+
+    // 表示する行を取得（シンタックスハイライト付き）
+    let display_width = (preview_area.width - 2) as usize - line_num_col_width;
     let lines: Vec<Line> = content
         .lines
         .iter()
+        .enumerate()
         .skip(app.preview_scroll)
         .take(visible_lines)
-        .map(|line| {
-            // 行が長すぎる場合は切り詰め
-            let display_width = (preview_area.width - 2) as usize;
-            let truncated: String = line.chars().take(display_width).collect();
-            Line::from(truncated)
+        .map(|(idx, highlighted_line)| {
+            let line_num = idx + 1;
+            let mut spans: Vec<Span> = Vec::new();
+
+            // 行番号を追加
+            let line_num_str = format!("{:>width$} ", line_num, width = line_num_width);
+            spans.push(Span::styled(
+                line_num_str,
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            let mut current_width = 0;
+
+            for hl_span in highlighted_line {
+                if current_width >= display_width {
+                    break;
+                }
+
+                let remaining = display_width - current_width;
+                let text: String = hl_span.text.chars().take(remaining).collect();
+                current_width += text.chars().count();
+
+                let style = match hl_span.fg {
+                    Some((r, g, b)) => Style::default().fg(Color::Rgb(r, g, b)),
+                    None => Style::default(),
+                };
+                spans.push(Span::styled(text, style));
+            }
+
+            Line::from(spans)
         })
         .collect();
 
