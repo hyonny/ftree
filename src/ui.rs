@@ -98,7 +98,7 @@ fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
                 if let Some(search_match) = app.search.get_match(idx) {
                     (highlight_matches(&node.name, &search_match.indices, base_style), is_current)
                 } else {
-                    (vec![Span::styled(&node.name, base_style.fg(Color::DarkGray))], false)
+                    (vec![Span::styled(&node.name, base_style.add_modifier(Modifier::DIM))], false)
                 }
             } else {
                 (vec![Span::styled(&node.name, base_style)], false)
