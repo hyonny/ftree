@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod input;
+mod search;
 mod tree;
 mod ui;
 

@@ -1,6 +1,7 @@
 use std::env;
 use std::io;
 
+use crate::search::SearchState;
 use crate::tree::FileTree;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,7 +14,7 @@ pub struct App {
     pub tree: FileTree,
     pub cursor: usize,
     pub mode: Mode,
-    pub search_query: String,
+    pub search: SearchState,
     pub show_hidden: bool,
     pub show_help: bool,
     pub message: Option<String>,
@@ -28,7 +29,7 @@ impl App {
             tree,
             cursor: 0,
             mode: Mode::Normal,
-            search_query: String::new(),
+            search: SearchState::new(),
             show_hidden: false,
             show_help: false,
             message: None,
@@ -36,7 +37,7 @@ impl App {
     }
 
     pub fn visible_nodes(&self) -> Vec<usize> {
-        self.tree.visible_nodes()
+        self.tree.visible_nodes(self.show_hidden)
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -114,5 +115,92 @@ impl App {
 
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub fn toggle_hidden(&mut self) {
+        self.show_hidden = !self.show_hidden;
+        // カーソル位置が範囲外になった場合に調整
+        let visible_count = self.visible_nodes().len();
+        if self.cursor >= visible_count && visible_count > 0 {
+            self.cursor = visible_count - 1;
+        }
+    }
+
+    pub fn enter_search_mode(&mut self) {
+        self.mode = Mode::Search;
+        self.search.clear();
+    }
+
+    pub fn exit_search_mode(&mut self) {
+        self.mode = Mode::Normal;
+        self.search.clear();
+    }
+
+    pub fn confirm_search(&mut self) {
+        // 現在のマッチにジャンプ
+        if let Some(node_idx) = self.search.current_match() {
+            self.jump_to_node(node_idx);
+        }
+        self.mode = Mode::Normal;
+    }
+
+    /// 次の検索結果に移動
+    pub fn next_search_match(&mut self) {
+        self.search.next_match();
+        if let Some(node_idx) = self.search.current_match() {
+            self.jump_to_node(node_idx);
+        }
+    }
+
+    /// 前の検索結果に移動
+    pub fn prev_search_match(&mut self) {
+        self.search.prev_match();
+        if let Some(node_idx) = self.search.current_match() {
+            self.jump_to_node(node_idx);
+        }
+    }
+
+    fn jump_to_node(&mut self, node_idx: usize) {
+        let visible = self.visible_nodes();
+        if let Some(pos) = visible.iter().position(|&i| i == node_idx) {
+            self.cursor = pos;
+        } else {
+            // ノードが見えていない場合、親ディレクトリを展開
+            self.expand_to_node(node_idx);
+            let visible = self.visible_nodes();
+            if let Some(pos) = visible.iter().position(|&i| i == node_idx) {
+                self.cursor = pos;
+            }
+        }
+    }
+
+    fn expand_to_node(&mut self, node_idx: usize) {
+        // ノードの親を辿って全て展開
+        let mut current = node_idx;
+        let mut parents = Vec::new();
+
+        while let Some(parent_idx) = self.tree.nodes[current].parent {
+            parents.push(parent_idx);
+            current = parent_idx;
+        }
+
+        for parent_idx in parents.into_iter().rev() {
+            if !self.tree.is_expanded(parent_idx) {
+                self.tree.toggle_expanded(parent_idx);
+            }
+        }
+    }
+
+    pub fn update_search(&mut self) {
+        // 全ノードの名前を収集して検索
+        let names: Vec<(usize, &str)> = self
+            .tree
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (i, n.name.as_str()))
+            .collect();
+
+        self.search.search(&names);
     }
 }

@@ -4,22 +4,56 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, Mode};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let [main_area, status_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+    let areas = if app.mode == Mode::Search {
+        let [main_area, search_area, status_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+        render_search_input(frame, app, search_area);
+        (main_area, status_area)
+    } else {
+        let [main_area, status_area] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        (main_area, status_area)
+    };
 
-    render_tree(frame, app, main_area);
-    render_status(frame, app, status_area);
+    render_tree(frame, app, areas.0);
+    render_status(frame, app, areas.1);
 
     if app.show_help {
         render_help(frame);
     }
 }
 
+fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
+    let match_count = app.search.match_count();
+    let title = if match_count > 0 {
+        format!(
+            " Search [{}/{}] (↑↓:move Enter:jump Esc:cancel) ",
+            app.search.current_index + 1,
+            match_count
+        )
+    } else if app.search.query.is_empty() {
+        " Search ".to_string()
+    } else {
+        " Search [no matches] ".to_string()
+    };
+
+    let input = Paragraph::new(app.search.query.as_str())
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .style(Style::default().fg(Color::Yellow));
+
+    frame.render_widget(input, area);
+}
+
 fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
     let visible = app.visible_nodes();
+    let is_searching = app.mode == Mode::Search && !app.search.query.is_empty();
 
     let items: Vec<ListItem> = visible
         .iter()
@@ -37,19 +71,33 @@ fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
                 "\u{f15b} "
             };
 
-            let style = if node.is_dir {
+            let base_style = if node.is_dir {
                 Style::default().fg(Color::Blue)
             } else {
                 Style::default()
             };
 
-            let line = Line::from(vec![
-                Span::raw(indent),
-                Span::styled(icon, style),
-                Span::styled(&node.name, style),
-            ]);
+            // 検索中でマッチしている場合はハイライト
+            let (name_spans, is_current) = if is_searching {
+                let is_current = app.search.is_current_match(idx);
+                if let Some(search_match) = app.search.get_match(idx) {
+                    (highlight_matches(&node.name, &search_match.indices, base_style), is_current)
+                } else {
+                    (vec![Span::styled(&node.name, base_style.fg(Color::DarkGray))], false)
+                }
+            } else {
+                (vec![Span::styled(&node.name, base_style)], false)
+            };
 
-            ListItem::new(line)
+            let mut spans = vec![Span::raw(indent), Span::styled(icon, base_style)];
+
+            // 現在のマッチには名前の後にマーカーを追加
+            spans.extend(name_spans);
+            if is_current {
+                spans.push(Span::styled(" <", Style::default().fg(Color::Green)));
+            }
+
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -75,9 +123,24 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         let visible = app.visible_nodes();
         let total = visible.len();
         let current = app.cursor + 1;
+
+        // 選択中のファイル情報を取得
+        let file_info = app.selected_index().map(|idx| {
+            let node = &app.tree.nodes[idx];
+            let size = node.size_display();
+            let modified = node.modified_display();
+            if size.is_empty() && modified.is_empty() {
+                String::new()
+            } else if size.is_empty() {
+                format!(" | {}", modified)
+            } else {
+                format!(" | {} {}", size, modified)
+            }
+        }).unwrap_or_default();
+
         format!(
-            " {}/{} | q:quit j/k:move Enter/Space:toggle y:copy Y:copy-abs h:parent ?/F1:help",
-            current, total
+            " {}/{}{}  ?:help",
+            current, total, file_info
         )
     };
 
@@ -121,6 +184,14 @@ fn render_help(frame: &mut Frame) {
             Span::raw("絶対パスをコピー"),
         ]),
         Line::from(vec![
+            Span::styled("  .          ", Style::default().fg(Color::Yellow)),
+            Span::raw("隠しファイル表示切替"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /          ", Style::default().fg(Color::Yellow)),
+            Span::raw("検索 (↑↓:次/前)"),
+        ]),
+        Line::from(vec![
             Span::styled("  ? / F1     ", Style::default().fg(Color::Yellow)),
             Span::raw("ヘルプ表示/閉じる"),
         ]),
@@ -144,7 +215,7 @@ fn render_help(frame: &mut Frame) {
         )
         .style(Style::default().bg(Color::Black));
 
-    let area = centered_rect(40, 17, frame.area());
+    let area = centered_rect(40, 19, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(help, area);
 }
@@ -157,4 +228,42 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .areas(area);
     area
+}
+
+fn highlight_matches(text: &str, indices: &[u32], base_style: Style) -> Vec<Span<'static>> {
+    let highlight_style = base_style.fg(Color::Red).add_modifier(Modifier::BOLD);
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans = Vec::new();
+    let mut current_span = String::new();
+    let mut in_highlight = false;
+
+    for (i, c) in chars.iter().enumerate() {
+        let should_highlight = indices.contains(&(i as u32));
+
+        if should_highlight != in_highlight {
+            if !current_span.is_empty() {
+                let style = if in_highlight {
+                    highlight_style
+                } else {
+                    base_style
+                };
+                spans.push(Span::styled(current_span.clone(), style));
+                current_span.clear();
+            }
+            in_highlight = should_highlight;
+        }
+
+        current_span.push(*c);
+    }
+
+    if !current_span.is_empty() {
+        let style = if in_highlight {
+            highlight_style
+        } else {
+            base_style
+        };
+        spans.push(Span::styled(current_span, style));
+    }
+
+    spans
 }
